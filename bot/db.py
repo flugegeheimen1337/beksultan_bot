@@ -183,6 +183,76 @@ class Database:
         sql += " ORDER BY created_at, id"
         return [self._operation(row) for row in self._read(sql, args)]
 
+    def get_operation(self, chat_id: int, operation_id: int) -> Operation | None:
+        rows = self._read(
+            "SELECT * FROM operations WHERE chat_id=? AND id=?",
+            [chat_id, operation_id],
+        )
+        if not rows:
+            return None
+        return self._operation(rows[0])
+
+    def recent_operations(self, chat_id: int, limit: int = 20) -> list[Operation]:
+        rows = self._read(
+            """
+            SELECT * FROM operations
+            WHERE chat_id=?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            [chat_id, limit],
+        )
+        return [self._operation(row) for row in rows]
+
+    def update_operation(
+        self,
+        chat_id: int,
+        operation_id: int,
+        *,
+        kind: str | None = None,
+        amount_kop: int | None = None,
+        comment: str | None = None,
+    ) -> Operation | None:
+        def write(connection: sqlite3.Connection) -> Operation | None:
+            row = connection.execute(
+                "SELECT * FROM operations WHERE chat_id=? AND id=?",
+                (chat_id, operation_id),
+            ).fetchone()
+            if row is None:
+                return None
+            current = self._operation(row)
+            connection.execute(
+                """
+                UPDATE operations
+                SET kind=?, amount_kop=?, comment=?
+                WHERE chat_id=? AND id=?
+                """,
+                (
+                    current.kind if kind is None else kind,
+                    current.amount_kop if amount_kop is None else amount_kop,
+                    current.comment if comment is None else comment,
+                    chat_id,
+                    operation_id,
+                ),
+            )
+            updated = connection.execute(
+                "SELECT * FROM operations WHERE id=?",
+                (operation_id,),
+            ).fetchone()
+            return self._operation(updated)
+
+        return self._write(write)
+
+    def delete_operation(self, chat_id: int, operation_id: int) -> bool:
+        def write(connection: sqlite3.Connection) -> bool:
+            cursor = connection.execute(
+                "DELETE FROM operations WHERE chat_id=? AND id=?",
+                (chat_id, operation_id),
+            )
+            return cursor.rowcount > 0
+
+        return self._write(write)
+
     def add_debt(
         self,
         *,

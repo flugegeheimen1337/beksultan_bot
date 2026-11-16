@@ -110,6 +110,43 @@ def test_debt_payments_close_and_reject_overpay(tmp_path):
     assert db.list_payments(7)
 
 
+def test_edit_keeps_the_original_day_and_delete_removes_it(tmp_path):
+    db = Database(str(tmp_path / "finance.db"))
+    moment = "2026-08-31T10:51:00+00:00"
+    operation = db.add_operation(
+        chat_id=1,
+        user_id=2,
+        user_name="Пока Так",
+        kind=INCOME,
+        amount_kop=50000,
+        comment="Нашел у подъезда",
+        created_at=moment,
+    )
+    updated = db.update_operation(1, operation.id, amount_kop=30000, comment="Исправил", kind=EXPENSE)
+    assert updated is not None
+    assert updated.amount_kop == 30000
+    assert updated.comment == "Исправил"
+    assert updated.kind == EXPENSE
+    assert updated.created_at == moment
+    assert db.delete_operation(1, operation.id) is True
+    assert db.get_operation(1, operation.id) is None
+    assert db.delete_operation(1, operation.id) is False
+
+
+def test_recent_operations_are_newest_first(tmp_path):
+    db = Database(str(tmp_path / "finance.db"))
+    first = db.add_operation(
+        chat_id=1, user_id=1, user_name="А", kind=INCOME, amount_kop=100,
+        comment="старая", created_at="2026-08-01T10:00:00+00:00",
+    )
+    second = db.add_operation(
+        chat_id=1, user_id=1, user_name="А", kind=EXPENSE, amount_kop=200,
+        comment="новая", created_at="2026-08-02T10:00:00+00:00",
+    )
+    recent = db.recent_operations(1, 10)
+    assert [item.id for item in recent] == [second.id, first.id]
+
+
 def test_auto_report_flag(tmp_path):
     db = Database(str(tmp_path / "finance.db"))
     assert db.auto_enabled(3) is False

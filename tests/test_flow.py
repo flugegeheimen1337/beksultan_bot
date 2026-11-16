@@ -11,8 +11,14 @@ from bot.config import Settings
 from bot.db import Database
 from bot.handlers import (
     cmd_expense,
+    cmd_fix,
     cmd_income,
     cmd_start,
+    edit_amount,
+    edit_amount_prompt,
+    edit_day,
+    edit_delete_confirm,
+    edit_pick,
     expense_amount,
     expense_comment,
     income_amount,
@@ -23,7 +29,7 @@ from bot.handlers import (
     report_day_prompt,
     cmd_report,
 )
-from bot.keyboards import BTN_TODAY
+from bot.keyboards import BTN_CONFIRM_DELETE, BTN_TODAY
 from bot.states import Flow
 from bot.texts import AMOUNT_ERROR
 
@@ -141,5 +147,35 @@ def test_screenshot_dialog_builds_day_report(tmp_path):
         await period_end(early, state, db, settings)
         assert "раньше начала" in early.answers[0]
         assert today >= date(2026, 8, 1)
+
+    asyncio.run(run())
+
+
+def test_zero_amount_deletes_a_past_operation(tmp_path):
+    async def run():
+        db = Database(str(tmp_path / "finance.db"))
+        settings = _settings(tmp_path / "finance.db")
+        state = _state()
+        await cmd_income(FakeMessage("+ Доход"), state)
+        await income_amount(FakeMessage("500"), state)
+        await income_comment(FakeMessage("ошибся"), state, db)
+        operation = db.operations_between(10, None, None)[0]
+
+        await cmd_fix(FakeMessage("✏️ Правка"), state)
+        listed = FakeMessage(BTN_TODAY)
+        await edit_day(listed, state, db, settings)
+        assert f"#{operation.id}" in listed.answers[-1]
+
+        picked = FakeMessage(str(operation.id))
+        await edit_pick(picked, state, db, settings)
+        assert "Что исправить?" in picked.answers[-1]
+
+        await edit_amount_prompt(FakeMessage("✏️ Сумма"), state)
+        zero = FakeMessage("0")
+        await edit_amount(zero, state, db, settings)
+        assert "удалить" in zero.answers[-1].lower()
+
+        await edit_delete_confirm(FakeMessage(BTN_CONFIRM_DELETE), state, db, settings)
+        assert db.get_operation(10, operation.id) is None
 
     asyncio.run(run())

@@ -23,8 +23,14 @@ from bot.keyboards import (
     BTN_CANCEL,
     BTN_CLOSE_FULL,
     BTN_CONFIRM_DELETE,
+    BTN_BACK_LIST,
     BTN_DAY,
     BTN_DEBT_EXCEL,
+    BTN_DELETE_OP,
+    BTN_EDIT_AMOUNT,
+    BTN_EDIT_COMMENT,
+    BTN_EDIT_TYPE,
+    BTN_FIX,
     BTN_DEBTS,
     BTN_DELETE,
     BTN_EXPENSE,
@@ -35,8 +41,11 @@ from bot.keyboards import (
     BTN_OWED,
     BTN_PAY,
     BTN_PERIOD,
+    BTN_RECENT,
     BTN_REPORT,
     cancel_kb,
+    edit_action_kb,
+    edit_day_kb,
     confirm_delete_kb,
     day_kb,
     debts_kb,
@@ -59,12 +68,15 @@ from bot.texts import (
     display_name,
     greeting,
     help_text,
+    kind_label,
+    operation_card,
+    operation_line,
     parse_user_date,
     payment_saved,
     saved_debt,
     saved_operation,
 )
-from bot.timeutils import format_day
+from bot.timeutils import format_day, local_day_bounds
 
 router = Router()
 log = logging.getLogger(__name__)
@@ -208,6 +220,17 @@ async def cmd_expense(message: Message, state: FSMContext) -> None:
     await state.set_state(Flow.expense_amount)
     await state.set_data({})
     await message.answer("Введите сумму расхода (₽):", reply_markup=cancel_kb())
+
+
+@router.message(Command("edit"))
+@router.message(F.text == BTN_FIX)
+async def cmd_fix(message: Message, state: FSMContext) -> None:
+    await state.set_state(Flow.edit_day)
+    await state.set_data({"section": "edit"})
+    await message.answer(
+        "Какую запись исправить?\nВыберите день, введите дату или нажмите «Последние».",
+        reply_markup=edit_day_kb(),
+    )
 
 
 @router.message(F.text == BTN_BACK)
@@ -576,10 +599,202 @@ async def debt_delete_unknown(message: Message) -> None:
     await message.answer("Подтвердите удаление или нажмите отмену.", reply_markup=confirm_delete_kb())
 
 
+def _zero_amount(text: str) -> bool:
+    raw = text.strip().lower().replace("₽", "").replace(" ", "").replace("руб.", "").replace("руб", "")
+    return raw in {"0", "0.0", "0.00", "0,0", "0,00"}
+
+
+async def _show_operation_list(
+    message: Message,
+    state: FSMContext,
+    db: Database,
+    settings: Settings,
+) -> None:
+    data = await state.get_data()
+    zone = settings.zone()
+    if data.get("mode") == "day":
+        day = date.fromisoformat(data["day"])
+        start, end = local_day_bounds(day, zone)
+        operations = list(reversed(db.operations_between(message.chat.id, start, end)))
+        header = f"Записи за {format_day(day)}"
+    else:
+        operations = db.recent_operations(message.chat.id, 20)
+        header = "Последние записи"
+    if not operations:
+        await state.set_state(Flow.edit_day)
+        await message.answer("Записей нет.", reply_markup=edit_day_kb())
+        return
+    shown = operations[:30]
+    blocks = [operation_line(operation, zone) for operation in shown]
+    extra = ""
+    if len(operations) > 30:
+        extra = "\n\nПоказаны последние 30."
+    parts = _pack(header + "\n\n", blocks)
+    parts[-1] += f"{extra}\n\nВведите номер операции:"
+    await state.set_state(Flow.edit_pick)
+    for index, part in enumerate(parts):
+        markup = cancel_kb() if index == len(parts) - 1 else None
+        await message.answer(part, reply_markup=markup)
+
+
+async def _show_operation_card(
+    message: Message,
+    state: FSMContext,
+    db: Database,
+    settings: Settings,
+    operation_id: int,
+    prefix: str = "",
+) -> None:
+    operation = db.get_operation(message.chat.id, operation_id)
+    if operation is None:
+        await state.set_state(Flow.edit_day)
+        await message.answer("Операция уже удалена.", reply_markup=edit_day_kb())
+        return
+    await state.set_state(Flow.edit_action)
+    await state.update_data(op_id=operation.id, section="edit")
+    await message.answer(
+        prefix + operation_card(operation, settings.zone()) + "\n\nЧто исправить?",
+        reply_markup=edit_action_kb(),
+    )
+
+
+@router.message(Flow.edit_day, F.text == BTN_RECENT)
+async def edit_recent(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
+    await state.update_data(mode="recent", section="edit")
+    await _show_operation_list(message, state, db, settings)
+
+
+@router.message(Flow.edit_day, F.text)
+async def edit_day(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
+    day = parse_user_date(message.text or "", settings.zone())
+    if day is None:
+        await message.answer(DATE_ERROR, reply_markup=edit_day_kb())
+        return
+    await state.update_data(mode="day", day=day.isoformat(), section="edit")
+    await _show_operation_list(message, state, db, settings)
+
+
+@router.message(Flow.edit_pick, F.text)
+async def edit_pick(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
+    operation_id = _parse_id(message.text or "")
+    operation = db.get_operation(message.chat.id, operation_id) if operation_id is not None else None
+    if operation is None:
+        await message.answer("❌ Операция с таким номером не найдена. Введите номер:")
+        return
+    await _show_operation_card(message, state, db, settings, operation.id)
+
+
+@router.message(Flow.edit_action, F.text == BTN_EDIT_AMOUNT)
+async def edit_amount_prompt(message: Message, state: FSMContext) -> None:
+    await state.set_state(Flow.edit_amount)
+    await message.answer(
+        "Введите новую сумму (₽).\nЧтобы убрать запись, отправьте 0.",
+        reply_markup=cancel_kb(),
+    )
+
+
+@router.message(Flow.edit_action, F.text == BTN_EDIT_COMMENT)
+async def edit_comment_prompt(message: Message, state: FSMContext) -> None:
+    await state.set_state(Flow.edit_comment)
+    await message.answer("Введите новый комментарий:", reply_markup=cancel_kb())
+
+
+@router.message(Flow.edit_action, F.text == BTN_EDIT_TYPE)
+async def edit_type(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
+    data = await state.get_data()
+    operation = db.get_operation(message.chat.id, int(data["op_id"]))
+    if operation is None:
+        await _show_operation_card(message, state, db, settings, int(data["op_id"]))
+        return
+    kind = EXPENSE if operation.kind == INCOME else INCOME
+    updated = db.update_operation(message.chat.id, operation.id, kind=kind)
+    if updated is None:
+        await message.answer("Не получилось изменить тип.", reply_markup=edit_action_kb())
+        return
+    await _show_operation_card(message, state, db, settings, updated.id, prefix="✅ Тип изменён.\n\n")
+
+
+@router.message(Flow.edit_action, F.text == BTN_DELETE_OP)
+async def edit_delete_prompt(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
+    data = await state.get_data()
+    operation = db.get_operation(message.chat.id, int(data["op_id"]))
+    if operation is None:
+        await _show_operation_card(message, state, db, settings, int(data["op_id"]))
+        return
+    await state.set_state(Flow.edit_delete_confirm)
+    amount = format_amount(from_kopecks(operation.amount_kop))
+    await message.answer(
+        f"Удалить #{operation.id} ({kind_label(operation.kind)}, {amount} ₽)?",
+        reply_markup=confirm_delete_kb(),
+    )
+
+
+@router.message(Flow.edit_action, F.text == BTN_BACK_LIST)
+async def edit_back_list(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
+    await _show_operation_list(message, state, db, settings)
+
+
+@router.message(Flow.edit_amount, F.text)
+async def edit_amount(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
+    data = await state.get_data()
+    operation_id = int(data["op_id"])
+    if _zero_amount(message.text or ""):
+        await state.set_state(Flow.edit_delete_confirm)
+        await message.answer("Сумма 0 — удалить эту операцию?", reply_markup=confirm_delete_kb())
+        return
+    amount = parse_amount(message.text)
+    if amount is None:
+        await message.answer(AMOUNT_ERROR, reply_markup=cancel_kb())
+        return
+    updated = db.update_operation(message.chat.id, operation_id, amount_kop=to_kopecks(amount))
+    if updated is None:
+        await message.answer("Операция уже удалена.", reply_markup=main_kb())
+        await state.clear()
+        return
+    await _show_operation_card(message, state, db, settings, updated.id, prefix="✅ Сумма изменена.\n\n")
+
+
+@router.message(Flow.edit_comment, F.text)
+async def edit_comment(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
+    comment, error = _take_comment(message.text or "")
+    if error:
+        await message.answer(error)
+        return
+    data = await state.get_data()
+    updated = db.update_operation(message.chat.id, int(data["op_id"]), comment=comment or "")
+    if updated is None:
+        await message.answer("Операция уже удалена.", reply_markup=main_kb())
+        await state.clear()
+        return
+    await _show_operation_card(
+        message,
+        state,
+        db,
+        settings,
+        updated.id,
+        prefix="✅ Комментарий изменён.\n\n",
+    )
+
+
+@router.message(Flow.edit_delete_confirm, F.text == BTN_CONFIRM_DELETE)
+async def edit_delete_confirm(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
+    data = await state.get_data()
+    deleted = db.delete_operation(message.chat.id, int(data["op_id"]))
+    text = "🗑 Операция удалена." if deleted else "Операция уже удалена."
+    await message.answer(text)
+    await _show_operation_list(message, state, db, settings)
+
+
+@router.message(Flow.edit_delete_confirm, F.text)
+async def edit_delete_unknown(message: Message) -> None:
+    await message.answer("Подтвердите удаление или нажмите отмену.", reply_markup=confirm_delete_kb())
+
+
 @router.message(Flow.income_amount)
 @router.message(Flow.expense_amount)
 @router.message(Flow.debt_amount)
 @router.message(Flow.debt_pay_amount)
+@router.message(Flow.edit_amount)
 async def amount_other(message: Message) -> None:
     await message.answer(AMOUNT_ERROR)
 
@@ -587,6 +802,7 @@ async def amount_other(message: Message) -> None:
 @router.message(Flow.income_comment)
 @router.message(Flow.expense_comment)
 @router.message(Flow.debt_comment)
+@router.message(Flow.edit_comment)
 async def comment_other(message: Message) -> None:
     await message.answer("Введите комментарий текстом:")
 
@@ -594,6 +810,7 @@ async def comment_other(message: Message) -> None:
 @router.message(Flow.report_day)
 @router.message(Flow.period_start)
 @router.message(Flow.period_end)
+@router.message(Flow.edit_day)
 async def date_other(message: Message) -> None:
     await message.answer(DATE_ERROR)
 
@@ -614,9 +831,24 @@ async def pick_other(message: Message) -> None:
     await message.answer("❌ Введите номер долга из списка:")
 
 
+@router.message(Flow.edit_pick)
+async def edit_pick_other(message: Message) -> None:
+    await message.answer("❌ Введите номер операции:")
+
+
 @router.message(Flow.debts_menu)
 async def debts_menu_other(message: Message) -> None:
     await message.answer("Выберите действие на клавиатуре.", reply_markup=debts_kb())
+
+
+@router.message(Flow.edit_action)
+async def edit_action_other(message: Message) -> None:
+    await message.answer("Выберите, что исправить.", reply_markup=edit_action_kb())
+
+
+@router.message(Flow.edit_delete_confirm)
+async def edit_delete_other(message: Message) -> None:
+    await message.answer("Подтвердите удаление или нажмите отмену.", reply_markup=confirm_delete_kb())
 
 
 @router.message(Flow.report_type)

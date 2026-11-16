@@ -4,7 +4,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from bot.db import DIRECTION_IN, Debt
+from bot.db import DIRECTION_IN, INCOME, Debt, Operation
 from bot.keyboards import BTN_TODAY, BTN_YESTERDAY
 from bot.money import format_amount, format_balance, from_kopecks
 from bot.timeutils import format_day, format_local, parse_date, today_local
@@ -48,12 +48,38 @@ def help_text() -> str:
         "− Расход — записать трату\n"
         "📊 Отчёт — Excel за день, период или всё время\n"
         "📒 Должники — книга должников. В файле отчёта это вкладка «Должники».\n"
+        "✏️ Правка — изменить сумму, комментарий, тип или удалить запись.\n"
         "\n"
         "🔔 Автоотчёт включается в меню отчёта: бот сам пришлёт итог дня.\n"
         "\n"
         "В группе бот читает суммы и кнопки, если он администратор. "
         "Иначе в @BotFather отключите Privacy Mode командой /setprivacy "
         "и добавьте бота в группу заново."
+    )
+
+
+def kind_label(kind: str) -> str:
+    if kind == INCOME:
+        return "+ Доход"
+    return "− Расход"
+
+
+def operation_line(operation: Operation, tz: ZoneInfo) -> str:
+    amount = format_amount(from_kopecks(operation.amount_kop))
+    comment = operation.comment or "—"
+    when = format_local(operation.created_at, tz)
+    return f"#{operation.id} {kind_label(operation.kind)}\n{amount} ₽ · {comment}\n{when}"
+
+
+def operation_card(operation: Operation, tz: ZoneInfo) -> str:
+    amount = format_amount(from_kopecks(operation.amount_kop))
+    comment = operation.comment or "—"
+    when = format_local(operation.created_at, tz)
+    return (
+        f"#{operation.id} {kind_label(operation.kind)}\n"
+        f"Сумма: {amount} ₽\n"
+        f"Комментарий: {comment}\n"
+        f"Дата: {when}"
     )
 
 

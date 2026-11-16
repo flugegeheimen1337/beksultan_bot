@@ -19,6 +19,12 @@ class Flow(StatesGroup):
     debt_pay_amount = State()
     debt_delete_pick = State()
     debt_delete_confirm = State()
+    edit_day = State()
+    edit_pick = State()
+    edit_action = State()
+    edit_amount = State()
+    edit_comment = State()
+    edit_delete_confirm = State()
 
 
 DEBT_STATES = {
