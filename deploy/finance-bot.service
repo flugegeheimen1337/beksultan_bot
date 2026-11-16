@@ -1,0 +1,20 @@
+[Unit]
+Description=Finance Telegram bot
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=financebot
+Group=financebot
+WorkingDirectory=/opt/finance-bot
+EnvironmentFile=/opt/finance-bot/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/finance-bot/venv/bin/python -m bot
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
