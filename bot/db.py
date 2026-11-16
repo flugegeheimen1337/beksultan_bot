@@ -9,6 +9,9 @@ from bot.timeutils import to_utc_iso
 
 INCOME = "income"
 EXPENSE = "expense"
+CASH = "cash"
+CARD = "card"
+_UNSET = object()
 DIRECTION_IN = "in"
 DIRECTION_OUT = "out"
 STATUS_OPEN = "open"
@@ -25,6 +28,7 @@ class Operation:
     amount_kop: int
     comment: str
     created_at: str
+    pocket: str | None = None
 
 
 @dataclass(frozen=True)
@@ -93,7 +97,8 @@ class Database:
                         kind TEXT NOT NULL CHECK(kind IN ('income', 'expense')),
                         amount_kop INTEGER NOT NULL CHECK(amount_kop > 0),
                         comment TEXT NOT NULL DEFAULT '',
-                        created_at TEXT NOT NULL
+                        created_at TEXT NOT NULL,
+                        pocket TEXT CHECK(pocket IN ('cash', 'card'))
                     );
                     CREATE INDEX IF NOT EXISTS idx_ops_chat_time
                         ON operations(chat_id, created_at);
@@ -132,6 +137,9 @@ class Database:
                     );
                     """
                 )
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(operations)")}
+                if "pocket" not in columns:
+                    connection.execute("ALTER TABLE operations ADD COLUMN pocket TEXT")
                 connection.commit()
             finally:
                 connection.close()
@@ -146,16 +154,19 @@ class Database:
         amount_kop: int,
         comment: str,
         created_at: str | None = None,
+        pocket: str | None = None,
     ) -> Operation:
         moment = created_at or to_utc_iso()
 
         def write(connection: sqlite3.Connection) -> Operation:
             cursor = connection.execute(
                 """
-                INSERT INTO operations (chat_id, user_id, user_name, kind, amount_kop, comment, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO operations (
+                    chat_id, user_id, user_name, kind, amount_kop, comment, created_at, pocket
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (chat_id, user_id, user_name, kind, amount_kop, comment, moment),
+                (chat_id, user_id, user_name, kind, amount_kop, comment, moment, pocket),
             )
             return self._operation(
                 connection.execute(
@@ -212,6 +223,7 @@ class Database:
         kind: str | None = None,
         amount_kop: int | None = None,
         comment: str | None = None,
+        pocket: str | None | object = _UNSET,
     ) -> Operation | None:
         def write(connection: sqlite3.Connection) -> Operation | None:
             row = connection.execute(
@@ -224,13 +236,14 @@ class Database:
             connection.execute(
                 """
                 UPDATE operations
-                SET kind=?, amount_kop=?, comment=?
+                SET kind=?, amount_kop=?, comment=?, pocket=?
                 WHERE chat_id=? AND id=?
                 """,
                 (
                     current.kind if kind is None else kind,
                     current.amount_kop if amount_kop is None else amount_kop,
                     current.comment if comment is None else comment,
+                    current.pocket if pocket is _UNSET else pocket,
                     chat_id,
                     operation_id,
                 ),
@@ -444,6 +457,7 @@ class Database:
             amount_kop=row["amount_kop"],
             comment=row["comment"],
             created_at=row["created_at"],
+            pocket=row["pocket"],
         )
 
     @staticmethod

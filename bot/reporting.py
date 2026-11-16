@@ -14,6 +14,7 @@ from bot.texts import (
     report_caption,
     report_filename,
     report_title,
+    wallet_kop,
 )
 from bot.timeutils import local_day_bounds
 
@@ -51,12 +52,16 @@ async def deliver_report(
     income_kop = sum(item.amount_kop for item in operations if item.kind == INCOME)
     expense_kop = sum(item.amount_kop for item in operations if item.kind != INCOME)
     balance_kop = income_kop - expense_kop
+    cash_kop, card_kop, other_kop = wallet_kop(operations)
     caption = report_caption(
         title,
         from_kopecks(income_kop),
         from_kopecks(expense_kop),
         from_kopecks(balance_kop),
         len(operations),
+        cash=from_kopecks(cash_kop),
+        card=from_kopecks(card_kop),
+        unassigned=from_kopecks(other_kop),
     )
     payload = build_report_workbook(operations, db.list_debts(chat_id), zone)
     await _send_file(bot, chat_id, message, payload, filename, caption, reply_markup)

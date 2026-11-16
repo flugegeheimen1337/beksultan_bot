@@ -4,7 +4,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from bot.db import DIRECTION_IN, INCOME, Debt, Operation
+from bot.db import CARD, CASH, DIRECTION_IN, INCOME, Debt, Operation
 from bot.keyboards import BTN_TODAY, BTN_YESTERDAY
 from bot.money import format_amount, format_balance, from_kopecks
 from bot.timeutils import format_day, format_local, parse_date, today_local
@@ -48,7 +48,8 @@ def help_text() -> str:
         "− Расход — записать трату\n"
         "📊 Отчёт — Excel за день, период или всё время\n"
         "📒 Должники — книга должников. В файле отчёта это вкладка «Должники».\n"
-        "✏️ Правка — изменить сумму, комментарий, тип или удалить запись.\n"
+        "✏️ Правка — изменить сумму, комментарий, тип, место или удалить запись.\n"
+        "💰 Баланс — сколько сейчас наличными и на карте.\n"
         "\n"
         "🔔 Автоотчёт включается в меню отчёта: бот сам пришлёт итог дня.\n"
         "\n"
@@ -64,11 +65,20 @@ def kind_label(kind: str) -> str:
     return "− Расход"
 
 
+def pocket_label(pocket: str | None) -> str:
+    if pocket == CASH:
+        return "💵 Наличные"
+    if pocket == CARD:
+        return "💳 Карта"
+    return "—"
+
+
 def operation_line(operation: Operation, tz: ZoneInfo) -> str:
     amount = format_amount(from_kopecks(operation.amount_kop))
     comment = operation.comment or "—"
     when = format_local(operation.created_at, tz)
-    return f"#{operation.id} {kind_label(operation.kind)}\n{amount} ₽ · {comment}\n{when}"
+    place = pocket_label(operation.pocket)
+    return f"#{operation.id} {kind_label(operation.kind)} · {place}\n{amount} ₽ · {comment}\n{when}"
 
 
 def operation_card(operation: Operation, tz: ZoneInfo) -> str:
@@ -79,13 +89,46 @@ def operation_card(operation: Operation, tz: ZoneInfo) -> str:
         f"#{operation.id} {kind_label(operation.kind)}\n"
         f"Сумма: {amount} ₽\n"
         f"Комментарий: {comment}\n"
+        f"Где: {pocket_label(operation.pocket)}\n"
         f"Дата: {when}"
     )
 
 
-def saved_operation(kind_label: str, amount: Decimal, comment: str) -> str:
+def saved_operation(kind_label: str, amount: Decimal, comment: str, pocket: str | None) -> str:
     shown = comment or "—"
-    return f"✅ {kind_label} записан!\nСумма: {format_amount(amount)} ₽\nКомментарий: {shown}"
+    return (
+        f"✅ {kind_label} записан!\n"
+        f"Сумма: {format_amount(amount)} ₽\n"
+        f"Комментарий: {shown}\n"
+        f"{pocket_label(pocket)}"
+    )
+
+
+def wallet_kop(operations: list[Operation]) -> tuple[int, int, int]:
+    cash = card = other = 0
+    for operation in operations:
+        signed = operation.amount_kop if operation.kind == INCOME else -operation.amount_kop
+        if operation.pocket == CASH:
+            cash += signed
+        elif operation.pocket == CARD:
+            card += signed
+        else:
+            other += signed
+    return cash, card, other
+
+
+def wallet_text(cash_kop: int, card_kop: int, other_kop: int = 0) -> str:
+    lines = [
+        "💰 Сейчас",
+        "",
+        f"💵 Наличные: {format_balance(from_kopecks(cash_kop))} ₽",
+        f"💳 Карта: {format_balance(from_kopecks(card_kop))} ₽",
+    ]
+    if other_kop:
+        lines.append(f"❔ Без места: {format_balance(from_kopecks(other_kop))} ₽")
+    total = cash_kop + card_kop + other_kop
+    lines.append(f"Баланс: {format_balance(from_kopecks(total))} ₽")
+    return "\n".join(lines)
 
 
 def report_caption(
@@ -94,15 +137,24 @@ def report_caption(
     expense: Decimal,
     balance: Decimal,
     count: int,
+    cash: Decimal | None = None,
+    card: Decimal | None = None,
+    unassigned: Decimal | None = None,
 ) -> str:
-    return (
-        f"📊 Отчёт: {title}\n"
-        f"➕ Доходы: {format_amount(income)} ₽\n"
-        f"➖ Расходы: {format_amount(expense)} ₽\n"
-        f"💰 Баланс: {format_balance(balance)} ₽\n"
-        f"\n"
-        f"Операций: {count}"
-    )
+    lines = [
+        f"📊 Отчёт: {title}",
+        f"➕ Доходы: {format_amount(income)} ₽",
+        f"➖ Расходы: {format_amount(expense)} ₽",
+        f"💰 Баланс: {format_balance(balance)} ₽",
+    ]
+    if cash is not None and card is not None:
+        lines.append(f"💵 Наличные: {format_balance(cash)} ₽")
+        lines.append(f"💳 Карта: {format_balance(card)} ₽")
+    if unassigned is not None and unassigned != 0:
+        lines.append(f"❔ Без места: {format_balance(unassigned)} ₽")
+    lines.append("")
+    lines.append(f"Операций: {count}")
+    return "\n".join(lines)
 
 
 def empty_report_text(title: str) -> str:

@@ -2,6 +2,7 @@ from datetime import date
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+from bot.db import CARD, CASH
 from bot.keyboards import BTN_EXPENSE, BTN_INCOME, BTN_REPORT
 from bot.texts import (
     empty_report_text,
@@ -10,6 +11,7 @@ from bot.texts import (
     report_caption,
     report_filename,
     saved_operation,
+    wallet_text,
 )
 
 
@@ -25,11 +27,28 @@ def test_greeting_uses_telegram_name():
 
 
 def test_saved_operation_matches_screenshots():
-    assert saved_operation("Доход", Decimal("500"), "Нашел у подъезда") == (
-        "✅ Доход записан!\nСумма: 500.00 ₽\nКомментарий: Нашел у подъезда"
+    assert saved_operation("Доход", Decimal("500"), "Нашел у подъезда", CASH) == (
+        "✅ Доход записан!\n"
+        "Сумма: 500.00 ₽\n"
+        "Комментарий: Нашел у подъезда\n"
+        "💵 Наличные"
     )
-    assert saved_operation("Расход", Decimal("1000"), "Перевёл другу за чипсы и сок") == (
-        "✅ Расход записан!\nСумма: 1 000.00 ₽\nКомментарий: Перевёл другу за чипсы и сок"
+    assert saved_operation("Расход", Decimal("1000"), "Перевёл другу за чипсы и сок", CARD) == (
+        "✅ Расход записан!\n"
+        "Сумма: 1 000.00 ₽\n"
+        "Комментарий: Перевёл другу за чипсы и сок\n"
+        "💳 Карта"
+    )
+
+
+def test_wallet_text_splits_cash_and_card():
+    assert wallet_text(35000, -100000, -65000) == (
+        "💰 Сейчас\n"
+        "\n"
+        "💵 Наличные: +350.00 ₽\n"
+        "💳 Карта: -1 000.00 ₽\n"
+        "❔ Без места: -650.00 ₽\n"
+        "Баланс: -1 300.00 ₽"
     )
 
 

@@ -6,6 +6,7 @@ class Flow(StatesGroup):
     income_comment = State()
     expense_amount = State()
     expense_comment = State()
+    pocket = State()
     report_type = State()
     report_day = State()
     period_start = State()

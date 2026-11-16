@@ -10,6 +10,8 @@ from io import BytesIO
 from bot.config import Settings
 from bot.db import Database
 from bot.handlers import (
+    choose_pocket,
+    cmd_balance,
     cmd_expense,
     cmd_fix,
     cmd_income,
@@ -18,6 +20,7 @@ from bot.handlers import (
     edit_amount_prompt,
     edit_day,
     edit_delete_confirm,
+    edit_pocket_prompt,
     edit_pick,
     expense_amount,
     expense_comment,
@@ -29,7 +32,7 @@ from bot.handlers import (
     report_day_prompt,
     cmd_report,
 )
-from bot.keyboards import BTN_CONFIRM_DELETE, BTN_TODAY
+from bot.keyboards import BTN_BALANCE, BTN_CARD, BTN_CASH, BTN_CONFIRM_DELETE, BTN_EDIT_POCKET, BTN_TODAY
 from bot.states import Flow
 from bot.texts import AMOUNT_ERROR
 
@@ -96,15 +99,21 @@ def test_screenshot_dialog_builds_day_report(tmp_path):
         await income_amount(amount, state)
         assert amount.answers == ["Введите комментарий:"]
         comment = FakeMessage("Нашел у подъезда")
-        await income_comment(comment, state, db)
-        assert "Доход записан" in comment.answers[0]
-        assert "500.00 ₽" in comment.answers[0]
+        await income_comment(comment, state)
+        assert comment.answers == ["Где деньги?"]
+        cash = FakeMessage(BTN_CASH)
+        await choose_pocket(cash, state, db, settings)
+        assert "Доход записан" in cash.answers[0]
+        assert "500.00 ₽" in cash.answers[0]
+        assert "💵 Наличные" in cash.answers[0]
 
         await cmd_expense(FakeMessage("− Расход"), state)
         await expense_amount(FakeMessage("150"), state)
         coffee = FakeMessage("Выбил кофе")
-        await expense_comment(coffee, state, db)
-        assert "Расход записан" in coffee.answers[0]
+        await expense_comment(coffee, state)
+        coffee_place = FakeMessage(BTN_CASH)
+        await choose_pocket(coffee_place, state, db, settings)
+        assert "Расход записан" in coffee_place.answers[0]
 
         await cmd_expense(FakeMessage("− Расход"), state)
         rejected = FakeMessage("-")
@@ -112,8 +121,11 @@ def test_screenshot_dialog_builds_day_report(tmp_path):
         assert rejected.answers == [AMOUNT_ERROR]
         await expense_amount(FakeMessage("1000"), state)
         transfer = FakeMessage("Перевёл другу за чипсы и сок")
-        await expense_comment(transfer, state, db)
-        assert "1 000.00 ₽" in transfer.answers[0]
+        await expense_comment(transfer, state)
+        card = FakeMessage(BTN_CARD)
+        await choose_pocket(card, state, db, settings)
+        assert "1 000.00 ₽" in card.answers[0]
+        assert "💳 Карта" in card.answers[0]
 
         await cmd_report(FakeMessage("📊 Отчёт"), state, db)
         assert (await state.get_state()) == Flow.report_type.state
@@ -136,7 +148,13 @@ def test_screenshot_dialog_builds_day_report(tmp_path):
         assert "➕ Доходы: 500.00 ₽" in document["caption"]
         assert "➖ Расходы: 1 150.00 ₽" in document["caption"]
         assert "💰 Баланс: -650.00 ₽" in document["caption"]
+        assert "💵 Наличные: +350.00 ₽" in document["caption"]
+        assert "💳 Карта: -1 000.00 ₽" in document["caption"]
         assert "Операций: 3" in document["caption"]
+        balance = FakeMessage(BTN_BALANCE)
+        await cmd_balance(balance, state, db)
+        assert "💵 Наличные: +350.00 ₽" in balance.answers[0]
+        assert "💳 Карта: -1 000.00 ₽" in balance.answers[0]
         workbook = load_workbook(BytesIO(document["data"]))
         assert workbook.sheetnames[1] == "Должники"
         assert workbook["Операции"]["C9"].value == -650
@@ -151,6 +169,30 @@ def test_screenshot_dialog_builds_day_report(tmp_path):
     asyncio.run(run())
 
 
+def test_edit_moves_cash_operation_onto_the_card(tmp_path):
+    async def run():
+        db = Database(str(tmp_path / "finance.db"))
+        settings = _settings(tmp_path / "finance.db")
+        state = _state()
+        await cmd_income(FakeMessage("+ Доход"), state)
+        await income_amount(FakeMessage("500"), state)
+        await income_comment(FakeMessage("зарплата"), state)
+        await choose_pocket(FakeMessage(BTN_CASH), state, db, settings)
+        operation = db.operations_between(10, None, None)[0]
+        assert operation.pocket == "cash"
+
+        await cmd_fix(FakeMessage("✏️ Правка"), state)
+        await edit_day(FakeMessage(BTN_TODAY), state, db, settings)
+        await edit_pick(FakeMessage(str(operation.id)), state, db, settings)
+        await edit_pocket_prompt(FakeMessage(BTN_EDIT_POCKET), state)
+        moved = FakeMessage(BTN_CARD)
+        await choose_pocket(moved, state, db, settings)
+        assert "Место изменено" in moved.answers[-1]
+        assert db.get_operation(10, operation.id).pocket == "card"
+
+    asyncio.run(run())
+
+
 def test_zero_amount_deletes_a_past_operation(tmp_path):
     async def run():
         db = Database(str(tmp_path / "finance.db"))
@@ -158,7 +200,8 @@ def test_zero_amount_deletes_a_past_operation(tmp_path):
         state = _state()
         await cmd_income(FakeMessage("+ Доход"), state)
         await income_amount(FakeMessage("500"), state)
-        await income_comment(FakeMessage("ошибся"), state, db)
+        await income_comment(FakeMessage("ошибся"), state)
+        await choose_pocket(FakeMessage(BTN_CASH), state, db, settings)
         operation = db.operations_between(10, None, None)[0]
 
         await cmd_fix(FakeMessage("✏️ Правка"), state)

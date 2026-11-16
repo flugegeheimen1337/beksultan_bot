@@ -53,7 +53,15 @@ def test_report_workbook_matches_screenshot_rows(tmp_path):
     assert workbook.sheetnames == ["Операции", "Должники"]
 
     sheet = workbook["Операции"]
-    assert [cell.value for cell in sheet[1]] == ["№", "Тип", "Сумма, ₽", "Комментарий", "Дата и время"]
+    assert [cell.value for cell in sheet[1]] == [
+        "№",
+        "Тип",
+        "Сумма, ₽",
+        "Комментарий",
+        "Дата и время",
+        "Где",
+    ]
+    assert sheet["F2"].value == "—"
     assert sheet["B2"].value == INCOME_LABEL
     assert sheet["C2"].value == 500
     assert sheet["D2"].value == "Нашел у подъезда"
@@ -69,6 +77,10 @@ def test_report_workbook_matches_screenshot_rows(tmp_path):
     assert sheet["C8"].value == 1150
     assert sheet["B9"].value == "💰 Баланс"
     assert sheet["C9"].value == -650
+    assert sheet["B10"].value == "💵 Наличные"
+    assert sheet["C10"].value == 0
+    assert sheet["B11"].value == "💳 Карта"
+    assert sheet["C11"].value == 0
     assert sheet["B2"].font.color.rgb == "00006100"
     assert sheet["A1"].font.color.rgb == "00FFFFFF"
 

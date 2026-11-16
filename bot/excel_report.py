@@ -10,7 +10,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from bot.db import DIRECTION_IN, EXPENSE, INCOME, Debt, Operation, Payment
-from bot.texts import direction_title
+from bot.texts import direction_title, pocket_label, wallet_kop
 from bot.timeutils import format_local, parse_iso
 
 HEADER_FILL = PatternFill("solid", fgColor="2F75B6")
@@ -79,7 +79,7 @@ def build_debts_workbook(
 
 
 def _write_operations(sheet: Worksheet, operations: list[Operation], tz: ZoneInfo) -> None:
-    headers = ["№", "Тип", "Сумма, ₽", "Комментарий", "Дата и время"]
+    headers = ["№", "Тип", "Сумма, ₽", "Комментарий", "Дата и время", "Где"]
     _header(sheet, headers)
     for index, operation in enumerate(operations, start=1):
         income = operation.kind == INCOME
@@ -92,24 +92,26 @@ def _write_operations(sheet: Worksheet, operations: list[Operation], tz: ZoneInf
             round(operation.amount_kop / 100, 2),
             operation.comment or "—",
             format_local(operation.created_at, tz),
+            pocket_label(operation.pocket),
         ]
         for column, value in enumerate(values, start=1):
             cell = sheet.cell(index + 1, column, value)
             cell.fill = fill
             cell.font = kind_font if column == 2 else NORMAL_FONT
             cell.border = THIN
-            cell.alignment = CENTER if column in {1, 5} else RIGHT if column == 3 else LEFT
+            cell.alignment = CENTER if column in {1, 5, 6} else RIGHT if column == 3 else LEFT
             if column == 3:
                 cell.number_format = AMOUNT_FORMAT
     last_data = max(len(operations) + 1, 1)
-    sheet.auto_filter.ref = f"A1:E{max(last_data, 1)}"
+    sheet.auto_filter.ref = f"A1:F{max(last_data, 1)}"
     sheet.freeze_panes = "A2"
-    _size(sheet, [6, 16, 16, 42, 20])
+    _size(sheet, [6, 16, 16, 42, 20, 16])
     _page(sheet)
 
     income_kop = sum(item.amount_kop for item in operations if item.kind == INCOME)
     expense_kop = sum(item.amount_kop for item in operations if item.kind == EXPENSE)
     balance_kop = income_kop - expense_kop
+    cash_kop, card_kop, _other_kop = wallet_kop(operations)
     total_row = len(operations) + 3
     label_cell = sheet.cell(total_row, 1, "Итого:")
     label_cell.font = BOLD_FONT
@@ -117,17 +119,20 @@ def _write_operations(sheet: Worksheet, operations: list[Operation], tz: ZoneInf
         (INCOME, "+ Доходы", income_kop),
         (EXPENSE, "− Расходы", expense_kop),
         ("balance", "💰 Баланс", balance_kop),
+        ("cash", "💵 Наличные", cash_kop),
+        ("card", "💳 Карта", card_kop),
     ]
     for offset, (kind, title, kop) in enumerate(summary, start=1):
         row = total_row + offset
         title_cell = sheet.cell(row, 2, title)
         amount_cell = sheet.cell(row, 3, round(kop / 100, 2))
-        positive = kind == INCOME or (kind == "balance" and kop >= 0)
+        signed = kind in {"balance", "cash", "card"}
+        positive = kind == INCOME or (signed and kop >= 0)
         fill = POSITIVE_FILL if positive and kind != EXPENSE else NEGATIVE_FILL
         if kind == EXPENSE:
             fill = EXPENSE_FILL
         font = INCOME_FONT if positive and kind != EXPENSE else EXPENSE_FONT
-        if kind == "balance" and kop >= 0:
+        if signed and kop >= 0:
             font = INCOME_FONT
             fill = POSITIVE_FILL
         title_cell.font = font
@@ -138,7 +143,7 @@ def _write_operations(sheet: Worksheet, operations: list[Operation], tz: ZoneInf
         amount_cell.alignment = RIGHT
         title_cell.border = THIN
         amount_cell.border = THIN
-        amount_cell.number_format = BALANCE_FORMAT if kind == "balance" else AMOUNT_FORMAT
+        amount_cell.number_format = BALANCE_FORMAT if signed else AMOUNT_FORMAT
 
 
 def _write_debts(sheet: Worksheet, debts: list[Debt], tz: ZoneInfo) -> None:

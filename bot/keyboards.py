@@ -22,6 +22,10 @@ BTN_I_OWE = "🙋 Я должен"
 BTN_CLOSE_FULL = "✅ Закрыть полностью"
 BTN_CONFIRM_DELETE = "✅ Да, удалить"
 BTN_FIX = "✏️ Правка"
+BTN_BALANCE = "💰 Баланс"
+BTN_CASH = "💵 Наличные"
+BTN_CARD = "💳 Карта"
+BTN_EDIT_POCKET = "💵 Где"
 BTN_RECENT = "📋 Последние"
 BTN_EDIT_AMOUNT = "✏️ Сумма"
 BTN_EDIT_COMMENT = "✏️ Комментарий"
@@ -42,8 +46,8 @@ def main_kb() -> ReplyKeyboardMarkup:
     return _kb(
         [
             [BTN_INCOME, BTN_EXPENSE],
-            [BTN_REPORT, BTN_DEBTS],
-            [BTN_FIX],
+            [BTN_REPORT, BTN_BALANCE],
+            [BTN_DEBTS, BTN_FIX],
         ]
     )
 
@@ -125,8 +129,18 @@ def edit_action_kb() -> ReplyKeyboardMarkup:
     return _kb(
         [
             [BTN_EDIT_AMOUNT, BTN_EDIT_COMMENT],
-            [BTN_EDIT_TYPE, BTN_DELETE_OP],
+            [BTN_EDIT_TYPE, BTN_EDIT_POCKET],
+            [BTN_DELETE_OP],
             [BTN_BACK_LIST],
+            [BTN_CANCEL],
+        ]
+    )
+
+
+def pocket_kb() -> ReplyKeyboardMarkup:
+    return _kb(
+        [
+            [BTN_CASH, BTN_CARD],
             [BTN_CANCEL],
         ]
     )

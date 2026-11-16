@@ -1,7 +1,8 @@
+import sqlite3
 from datetime import date
 from zoneinfo import ZoneInfo
 
-from bot.db import DIRECTION_IN, DIRECTION_OUT, EXPENSE, INCOME, Database
+from bot.db import CARD, CASH, DIRECTION_IN, DIRECTION_OUT, EXPENSE, INCOME, Database
 from bot.money import from_kopecks
 from bot.timeutils import local_day_bounds
 
@@ -145,6 +146,60 @@ def test_recent_operations_are_newest_first(tmp_path):
     )
     recent = db.recent_operations(1, 10)
     assert [item.id for item in recent] == [second.id, first.id]
+
+
+def test_old_database_gains_pocket_and_split_survives_edit(tmp_path):
+    path = tmp_path / "finance.db"
+    connection = sqlite3.connect(path)
+    connection.execute(
+        """
+        CREATE TABLE operations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            user_id INTEGER,
+            user_name TEXT NOT NULL DEFAULT '',
+            kind TEXT NOT NULL CHECK(kind IN ('income', 'expense')),
+            amount_kop INTEGER NOT NULL CHECK(amount_kop > 0),
+            comment TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO operations (chat_id, user_id, user_name, kind, amount_kop, comment, created_at)
+        VALUES (1, 1, 'А', 'income', 50000, 'старая', '2026-08-01T10:00:00+00:00')
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    db = Database(str(path))
+    old = db.operations_between(1, None, None)[0]
+    assert old.pocket is None
+    cash = db.add_operation(
+        chat_id=1,
+        user_id=1,
+        user_name="А",
+        kind=INCOME,
+        amount_kop=20000,
+        comment="наличные",
+        pocket=CASH,
+    )
+    card = db.add_operation(
+        chat_id=1,
+        user_id=1,
+        user_name="А",
+        kind=EXPENSE,
+        amount_kop=5000,
+        comment="карта",
+        pocket=CARD,
+    )
+    moved = db.update_operation(1, cash.id, pocket=CARD)
+    assert moved is not None
+    assert moved.pocket == CARD
+    assert card.pocket == CARD
+    assert db.get_operation(1, old.id).pocket is None
 
 
 def test_auto_report_flag(tmp_path):

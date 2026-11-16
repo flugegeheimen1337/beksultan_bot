@@ -10,6 +10,8 @@ from aiogram.types import ErrorEvent, Message, TelegramObject
 
 from bot.config import Settings
 from bot.db import (
+    CARD,
+    CASH,
     DIRECTION_IN,
     DIRECTION_OUT,
     EXPENSE,
@@ -24,11 +26,15 @@ from bot.keyboards import (
     BTN_CLOSE_FULL,
     BTN_CONFIRM_DELETE,
     BTN_BACK_LIST,
+    BTN_BALANCE,
+    BTN_CARD,
+    BTN_CASH,
     BTN_DAY,
     BTN_DEBT_EXCEL,
     BTN_DELETE_OP,
     BTN_EDIT_AMOUNT,
     BTN_EDIT_COMMENT,
+    BTN_EDIT_POCKET,
     BTN_EDIT_TYPE,
     BTN_FIX,
     BTN_DEBTS,
@@ -52,6 +58,7 @@ from bot.keyboards import (
     direction_kb,
     main_kb,
     pay_amount_kb,
+    pocket_kb,
     report_type_kb,
 )
 from bot.money import format_amount, from_kopecks, parse_amount, to_kopecks
@@ -75,6 +82,8 @@ from bot.texts import (
     payment_saved,
     saved_debt,
     saved_operation,
+    wallet_kop,
+    wallet_text,
 )
 from bot.timeutils import format_day, local_day_bounds
 
@@ -208,6 +217,15 @@ async def cmd_debts(message: Message, state: FSMContext, db: Database) -> None:
     await _show_debts(message, state, db)
 
 
+@router.message(Command("balance"))
+@router.message(F.text == BTN_BALANCE)
+async def cmd_balance(message: Message, state: FSMContext, db: Database) -> None:
+    await state.clear()
+    operations = db.operations_between(message.chat.id, None, None)
+    cash_kop, card_kop, other_kop = wallet_kop(operations)
+    await message.answer(wallet_text(cash_kop, card_kop, other_kop), reply_markup=main_kb())
+
+
 @router.message(F.text == BTN_INCOME)
 async def cmd_income(message: Message, state: FSMContext) -> None:
     await state.set_state(Flow.income_amount)
@@ -339,35 +357,58 @@ async def expense_amount(message: Message, state: FSMContext) -> None:
 
 
 @router.message(Flow.income_comment, F.text)
-async def income_comment(message: Message, state: FSMContext, db: Database) -> None:
-    await _save_operation(message, state, db, INCOME, "Доход")
+async def income_comment(message: Message, state: FSMContext) -> None:
+    await _ask_pocket(message, state, INCOME, "Доход")
 
 
 @router.message(Flow.expense_comment, F.text)
-async def expense_comment(message: Message, state: FSMContext, db: Database) -> None:
-    await _save_operation(message, state, db, EXPENSE, "Расход")
+async def expense_comment(message: Message, state: FSMContext) -> None:
+    await _ask_pocket(message, state, EXPENSE, "Расход")
 
 
-async def _save_operation(message: Message, state: FSMContext, db: Database, kind: str, label: str) -> None:
+async def _ask_pocket(message: Message, state: FSMContext, kind: str, label: str) -> None:
     comment, error = _take_comment(message.text or "")
     if error:
         await message.answer(error)
         return
+    await state.update_data(kind=kind, label=label, comment=comment or "", pocket_mode="new")
+    await state.set_state(Flow.pocket)
+    await message.answer("Где деньги?", reply_markup=pocket_kb())
+
+
+@router.message(Flow.pocket, F.text.in_({BTN_CASH, BTN_CARD}))
+async def choose_pocket(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
+    pocket = CASH if message.text == BTN_CASH else CARD
     data = await state.get_data()
+    if data.get("pocket_mode") == "edit":
+        updated = db.update_operation(message.chat.id, int(data["op_id"]), pocket=pocket)
+        if updated is None:
+            await state.clear()
+            await message.answer("Операция уже удалена.", reply_markup=main_kb())
+            return
+        await _show_operation_card(message, state, db, settings, updated.id, prefix="✅ Место изменено.\n\n")
+        return
     amount_kop = int(data["amount_kop"])
+    comment = data.get("comment") or ""
     await state.clear()
     db.add_operation(
         chat_id=message.chat.id,
         user_id=message.from_user.id,
         user_name=_name(message),
-        kind=kind,
+        kind=data["kind"],
         amount_kop=amount_kop,
-        comment=comment or "",
+        comment=comment,
+        pocket=pocket,
     )
     await message.answer(
-        saved_operation(label, from_kopecks(amount_kop), comment or ""),
+        saved_operation(data["label"], from_kopecks(amount_kop), comment, pocket),
         reply_markup=main_kb(),
     )
+
+
+@router.message(Flow.pocket, F.text)
+async def pocket_unknown(message: Message) -> None:
+    await message.answer("Выберите: наличные или карта.", reply_markup=pocket_kb())
 
 
 @router.message(Flow.report_type, F.text == BTN_DAY)
@@ -699,6 +740,13 @@ async def edit_comment_prompt(message: Message, state: FSMContext) -> None:
     await message.answer("Введите новый комментарий:", reply_markup=cancel_kb())
 
 
+@router.message(Flow.edit_action, F.text == BTN_EDIT_POCKET)
+async def edit_pocket_prompt(message: Message, state: FSMContext) -> None:
+    await state.set_state(Flow.pocket)
+    await state.update_data(pocket_mode="edit")
+    await message.answer("Где деньги?", reply_markup=pocket_kb())
+
+
 @router.message(Flow.edit_action, F.text == BTN_EDIT_TYPE)
 async def edit_type(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
     data = await state.get_data()
@@ -805,6 +853,11 @@ async def amount_other(message: Message) -> None:
 @router.message(Flow.edit_comment)
 async def comment_other(message: Message) -> None:
     await message.answer("Введите комментарий текстом:")
+
+
+@router.message(Flow.pocket)
+async def pocket_other(message: Message) -> None:
+    await message.answer("Выберите: наличные или карта.", reply_markup=pocket_kb())
 
 
 @router.message(Flow.report_day)

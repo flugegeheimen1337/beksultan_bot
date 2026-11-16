@@ -20,6 +20,7 @@ COMMANDS = [
     BotCommand(command="start", description="Запустить бота"),
     BotCommand(command="help", description="Что умеет бот"),
     BotCommand(command="report", description="Собрать отчёт"),
+    BotCommand(command="balance", description="Наличные и карта"),
     BotCommand(command="debts", description="Книга должников"),
     BotCommand(command="edit", description="Изменить или удалить запись"),
     BotCommand(command="cancel", description="Отменить действие"),
